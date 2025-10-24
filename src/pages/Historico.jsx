@@ -12,6 +12,8 @@ const Historico = () => {
   const [order, setOrder] = useState("recentes");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [modalItem, setModalItem] = useState(null);
+
 
   // Função para buscar dados do backend
   const fetchHistorico = async () => {
@@ -235,12 +237,13 @@ const Historico = () => {
               <thead>
                 <tr>
                   <th className="produto-col">Produto</th>
-                  <th className="tipo-col">Tipo</th>
-                  <th className="marca-col">Marca</th>
-                  <th className="validade-col">Validade</th>
+                  <th className="tipo-col hide-mobile">Tipo</th>
+                  <th className="marca-col hide-mobile">Marca</th>
+                  <th className="validade-col hide-mobile">Validade</th>
                   <th className="quantidade-col">Qtde</th>
                   <th className="status-col">Status</th>
-                  <th className="horario-col">Horário</th>
+                  <th className="horario-col hide-mobile">Horário</th>
+                  <th className="detalhes-col show-mobile">Detalhes</th>
                 </tr>
               </thead>
               <tbody>
@@ -263,9 +266,9 @@ const Historico = () => {
                           <span className="produto-nome">{item.nome}</span>
                         </div>
                       </td>
-                      <td className="tipo-cell">{item.tipo}</td>
-                      <td className="marca-cell">{item.marca}</td>
-                      <td className="validade-cell">{formatValidade(item.validade)}</td>
+                      <td className="tipo-cell hide-mobile">{item.tipo}</td>
+                      <td className="marca-cell hide-mobile">{item.marca}</td>
+                      <td className="validade-cell hide-mobile">{formatValidade(item.validade)}</td>
                       <td className="quantidade-cell">
                         <span className="quantidade-destaque">{item.quantidade}</span>
                       </td>
@@ -293,7 +296,17 @@ const Historico = () => {
                           </span>
                         </span>
                       </td>
-                      <td className="horario-cell">{item.horario}</td>
+                      <td className="horario-cell hide-mobile">{item.horario}</td>
+                      
+                      {/* Botão de detalhes no mobile */}
+                      <td className="detalhes-cell show-mobile">
+                        <button
+                          className="detalhes-btn"
+                          onClick={() => setModalItem(item)}
+                        >
+                          <span className="material-icons-sharp">info</span>
+                        </button>
+                      </td>
                     </tr>
                   ))
                 )}
