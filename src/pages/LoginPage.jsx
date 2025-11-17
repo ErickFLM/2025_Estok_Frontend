@@ -1,29 +1,88 @@
+// src/pages/LoginPage.jsx
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import "./LoginPage.css";
+
+// importe o setToken do seu util
+import { setToken } from "../utils/authFetch";
 
 const LoginPage = () => {
   const [usuario, setUsuario] = useState("");
   const [senha, setSenha] = useState("");
   const [erro, setErro] = useState("");
+  const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
- const handleSubmit = (e) => {
-  e.preventDefault();
-  if (!usuario || !senha) {
-    setErro("Preencha usuário e senha.");
-    return;
-  }
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setErro("");
 
-  // Exemplo simples (coloca tuas credenciais fixas ou fakes por enquanto)
-  if (usuario === "admin" && senha === "1234") {
-    localStorage.setItem("isLoggedIn", "true");
-    navigate("/dashboard");
-  } else {
-    setErro("Usuário ou senha incorretos.");
-  }
-};
+    if (!usuario || !senha) {
+      setErro("Preencha usuário e senha.");
+      return;
+    }
 
+    setLoading(true);
+    try {
+      const res = await fetch(
+        "https://two025-estok-backend.onrender.com/api/estok/auth/login",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            // pega a api key do env (garanta que VITE_AUTH_KEY esteja definida)
+            "x-api-key": import.meta.env.VITE_AUTH_KEY || ""
+          },
+          body: JSON.stringify({
+            email: usuario.trim(),
+            password: senha
+          })
+        }
+      );
+
+      if (!res.ok) {
+        // Tratamento por status HTTP
+        if (res.status === 401) {
+          setErro("Email ou senha incorretos.");
+        } else if (res.status === 500) {
+          setErro("Erro no servidor. Tente novamente mais tarde.");
+        } else {
+          // tenta pegar mensagem do backend, se houver
+          const errBody = await res.json().catch(() => null);
+          const msg = errBody?.message || "Erro ao autenticar";
+          setErro(msg);
+        }
+        setLoading(false);
+        return;
+      }
+
+      const data = await res.json();
+
+      // seu backend retorna accessToken
+      if (!data || !data.accessToken) {
+        setErro("Resposta inválida do servidor.");
+        setLoading(false);
+        return;
+      }
+
+      // salva token usando o util centralizado
+      setToken(data.accessToken);
+
+      // opcional: salva dados do usuário pra usar no front
+      if (data.user) {
+        localStorage.setItem("user", JSON.stringify(data.user));
+      }
+
+      // navega para dashboard (ou onde quiser)
+      navigate("/dashboard", { replace: true });
+
+    } catch (err) {
+      console.error(err);
+      setErro("Erro de conexão. Verifique sua internet e tente novamente.");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <div className="login-bg">
@@ -54,8 +113,8 @@ const LoginPage = () => {
             autoComplete="current-password"
           />
           {erro && <div className="login-erro">{erro}</div>}
-          <button type="submit" className="login-btn">
-            Entrar
+          <button type="submit" className="login-btn" disabled={loading}>
+            {loading ? "Entrando..." : "Entrar"}
           </button>
         </form>
         <a href="#" className="login-link">
