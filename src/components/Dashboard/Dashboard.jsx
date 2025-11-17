@@ -1,9 +1,12 @@
+// src/pages/Dashboard.jsx
 import React, { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import Sidebar from "../Sidebar/Sidebar";
 import Card from "../Card/Card";
 import { HistoricoPrateleiraCard } from "../HistoricoPrateleiraCard";
 import ProdutosModal from "./ProdutosModal";
 import "./Dashboard.css";
+import authFetch from "../../utils/authFetch"; // garanta que authFetch aceite onUnauthorized
 
 const modalTitles = {
   reposicao: "Produtos precisando de reposição",
@@ -20,57 +23,84 @@ const Dashboard = () => {
     expired: [],
   });
   const [loading, setLoading] = useState(true);
+  const [erro, setErro] = useState("");
+  const navigate = useNavigate();
 
-  // 🔹 Busca os dados da API
   useEffect(() => {
+    let mounted = true;
+
     const fetchData = async () => {
+      setLoading(true);
+      setErro("");
+
       try {
-        const response = await fetch(
+        const res = await authFetch(
           "https://two025-estok-backend.onrender.com/api/estok/product/get-product-status",
           {
             method: "GET",
             headers: {
               "Content-Type": "application/json",
-              "x-api-key": import.meta.env.VITE_AUTH_KEY,
+              "x-api-key": import.meta.env.VITE_AUTH_KEY || "",
             },
+          },
+          {
+            onUnauthorized: () => navigate("/login", { replace: true }),
           }
         );
 
-        if (!response.ok) throw new Error("Erro ao buscar dados do estoque");
+        if (!res.ok) {
+          if (res.status === 401) {
+            // authFetch já chamou onUnauthorized, mas mostramos mensagem breve
+            if (mounted) setErro("Sessão expirada. Faça login novamente.");
+            return;
+          } else if (res.status === 500) {
+            if (mounted) setErro("Erro no servidor. Tente novamente mais tarde.");
+            return;
+          } else {
+            const errBody = await res.json().catch(() => null);
+            if (mounted) setErro(errBody?.message || "Erro ao buscar dados do estoque.");
+            return;
+          }
+        }
 
-        const data = await response.json();
+        const data = await res.json();
 
-        // 🔹 Formata os dados (adiciona um id e ajusta validade)
-        const format = (list) =>
+        // Função para formatar listas (mantendo segurança caso backend retorne undefined)
+        const format = (list = []) =>
           list.map((p, index) => ({
-            id: index + 1,
+            id: p.id ?? `${Date.now()}-${index}`,
             produto: p.produto,
             tipo: p.tipo,
             marca: p.marca,
             qtd_max: p.qtd_max,
             qtd_atual: p.qtd_atual,
-            validade: p.validade
-              ? new Date(p.validade).toLocaleDateString("pt-BR")
-              : "-",
+            validade: p.validade ? new Date(p.validade).toLocaleDateString("pt-BR") : "-",
           }));
 
-        setStockData({
-          lowStock: format(data.lowStock || []),
-          mediumStock: format(data.mediumStock || []),
-          highStock: format(data.highStock || []),
-          expired: format(data.expired || []),
-        });
+        if (mounted) {
+          setStockData({
+            lowStock: format(data.lowStock || []),
+            mediumStock: format(data.mediumStock || []),
+            highStock: format(data.highStock || []),
+            expired: format(data.expired || []),
+          });
+        }
       } catch (error) {
         console.error("Erro ao buscar produtos:", error);
+        if (mounted) setErro("Erro de conexão. Verifique sua internet e tente novamente.");
       } finally {
-        setLoading(false);
+        if (mounted) setLoading(false);
       }
     };
 
     fetchData();
-  }, []);
 
-  // 🔹 Define os produtos que vão pro modal
+    return () => {
+      mounted = false;
+    };
+  }, [navigate]);
+
+  // Define os produtos que vão pro modal
   let modalProdutos = [];
   if (modalOpen === "reposicao") modalProdutos = stockData.mediumStock;
   if (modalOpen === "criticos") modalProdutos = stockData.lowStock;
@@ -94,6 +124,9 @@ const Dashboard = () => {
         <Sidebar />
         <main>
           <h2>Dashboard</h2>
+
+          {erro && <div className="dashboard-erro">{erro}</div>}
+
           <div className="insights">
             <Card
               icon="two_pager_store"
@@ -122,14 +155,10 @@ const Dashboard = () => {
           </div>
 
           <div className="mt-8 historico-margin-top">
-            <h2 className="mb-4 font-bold text-lg">
-              Histórico de Movimentações
-            </h2>
+            <h2 className="mb-4 font-bold text-lg">Histórico de Movimentações</h2>
             <HistoricoPrateleiraCard />
           </div>
-          
         </main>
-        
       </div>
 
       <ProdutosModal

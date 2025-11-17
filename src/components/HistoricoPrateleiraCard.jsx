@@ -1,5 +1,8 @@
+// src/components/HistoricoPrateleiraCard.jsx
 import React, { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import "./HistoricoPrateleiraCard.css";
+import authFetch, { getToken } from "../utils/authFetch"; // certifique-se de ter authFetch com onUnauthorized
 
 // Skeleton loader para os cards
 export const MovimentoSkeleton = () => (
@@ -19,65 +22,111 @@ export const HistoricoPrateleiraCard = () => {
   const [movimentos, setMovimentos] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const navigate = useNavigate();
 
   // Função para buscar os dados do histórico
   const fetchHistorico = async () => {
-    try {
-      setLoading(true);
-      setError(null);
+    setLoading(true);
+    setError(null);
 
-      const response = await fetch(
+    try {
+      const res = await authFetch(
         "https://two025-estok-backend.onrender.com/api/estok/product/get-history",
         {
           method: "GET",
           headers: {
             "Content-Type": "application/json",
-            "x-api-key": import.meta.env.VITE_AUTH_KEY,
+            "x-api-key": import.meta.env.VITE_AUTH_KEY || "",
           },
+        },
+        {
+          onUnauthorized: () => navigate("/login", { replace: true }),
         }
       );
 
-      if (!response.ok) {
-        throw new Error("Erro ao carregar os dados do histórico");
+      if (!res.ok) {
+        if (res.status === 401) {
+          setError("Sessão expirada. Faça login novamente.");
+          return;
+        } else if (res.status === 500) {
+          setError("Erro no servidor. Tente novamente mais tarde.");
+          return;
+        } else {
+          const errBody = await res.json().catch(() => null);
+          setError(errBody?.message || "Erro ao carregar o histórico.");
+          return;
+        }
       }
 
-      const data = await response.json();
+      const data = await res.json();
+
+      // Se data não for array, tenta pegar propriedade adequada
+      const list = Array.isArray(data) ? data : (Array.isArray(data.result) ? data.result : []);
 
       // Mapeia os dados da API para o formato esperado pelo componente
-      const movimentosFormatados = data.map((item) => ({
-        id: item.id,
-        produto: item.nome_produto,
-        tipo: item.nome_status === "entrou" ? "entrada" : "saida",
-        categoria: item.nome_tipo,
-        marca: item.nome_marca,
-        imagem: "../public/Leite.png", // Ajuste conforme necessário
-        quantidade: item.quantidade,
-        validade: item.validade,
+      const movimentosFormatados = list.map((item) => ({
+        id: item.id ?? `${item.nome_produto ?? "p"}-${Math.random().toString(36).slice(2, 8)}`,
+        produto: item.nome_produto ?? item.produto ?? "-",
+        tipo: (item.nome_status === "entrou" || item.nome_status === "entrada") ? "entrada" : "saida",
+        categoria: item.nome_tipo ?? item.tipo ?? "-",
+        marca: item.nome_marca ?? item.marca ?? "-",
+        // tenta usar imagem por produto na pasta public, se não tiver, fallback
+        imagem: item.imagem ? item.imagem : `/${(item.nome_produto || "default").replace(/\s+/g, "")}.png`,
+        quantidade: item.quantidade ?? item.qtd ?? 0,
+        validade: item.validade ? new Date(item.validade).toLocaleDateString("pt-BR") : "-",
       }));
 
       setMovimentos(movimentosFormatados);
-      setLoading(false);
     } catch (err) {
-      setError(err.message);
+      console.error("Erro ao carregar o histórico:", err);
+      setError("Erro de conexão. Verifique sua internet e tente novamente.");
+    } finally {
       setLoading(false);
     }
   };
 
-  // useEffect para carregar histórico na montagem do componente
+  // useEffect para carregar histórico na montagem do componente e abrir WebSocket
   useEffect(() => {
+    let mounted = true;
     fetchHistorico();
 
-    // Exemplo WebSocket para atualizar dados em tempo real
-    const socket = new WebSocket("wss://two025-estok-backend.onrender.com");
+    // configura URL do websocket incluindo token/apiKey se disponível
+    const apiKey = import.meta.env.VITE_AUTH_KEY || "";
+    const token = getToken();
+    const params = new URLSearchParams();
+    if (apiKey) params.append("x-api-key", apiKey);
+    if (token) params.append("token", token);
+    const wsUrl = `wss://two025-estok-backend.onrender.com${params.toString() ? `?${params.toString()}` : ""}`;
 
-    socket.onmessage = () => {
-      fetchHistorico();
-    };
+    let socket;
+    try {
+      socket = new WebSocket(wsUrl);
+
+      socket.onopen = () => {
+        // console.log("WS conectado", wsUrl);
+      };
+
+      socket.onmessage = (ev) => {
+        // Quando receber mensagem, atualiza histórico (se ainda montado)
+        if (!mounted) return;
+        // Pode validar ev.data se quiser; aqui simplesmente refaz a busca
+        fetchHistorico();
+      };
+
+      socket.onerror = (e) => {
+        // erro no socket não impede a ui; log para debug
+        console.warn("WebSocket error:", e);
+      };
+    } catch (e) {
+      console.warn("Falha ao inicializar WebSocket:", e);
+    }
 
     return () => {
-      socket.close();
+      mounted = false;
+      if (socket && socket.readyState === WebSocket.OPEN) socket.close();
     };
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [navigate]);
 
   if (loading) {
     return (
@@ -115,6 +164,7 @@ export const HistoricoPrateleiraCard = () => {
                   src={mov.imagem}
                   alt={mov.produto}
                   className="historico-img"
+                  onError={(e) => (e.target.src = "/default.png")}
                 />
                 <div className="historico-info">
                   <span className="historico-produto">{mov.produto}</span>

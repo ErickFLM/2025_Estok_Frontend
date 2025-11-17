@@ -1,7 +1,10 @@
+// src/pages/Historico.jsx
 import React, { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import Sidebar from "../components/Sidebar/Sidebar";
 import "./Historico.css";
 import Footer from "../components/Footer";
+import authFetch from "../utils/authFetch"; // certifique-se de ter a versão que aceita onUnauthorized
 
 const PAGE_SIZE = 4;
 
@@ -13,75 +16,118 @@ const Historico = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [modalItem, setModalItem] = useState(null);
-
+  const navigate = useNavigate();
 
   // Função para buscar dados do backend
   const fetchHistorico = async () => {
     setLoading(true);
     setError(null);
+
     try {
-      const response = await fetch(
+      const res = await authFetch(
         "https://two025-estok-backend.onrender.com/api/estok/product/get-history",
         {
           method: "GET",
           headers: {
             "Content-Type": "application/json",
-            "x-api-key": import.meta.env.VITE_AUTH_KEY,
+            "x-api-key": import.meta.env.VITE_AUTH_KEY || "",
           },
+        },
+        {
+          onUnauthorized: () => navigate("/login", { replace: true }),
         }
       );
 
-      if (!response.ok) {
-        throw new Error(`Erro ${response.status}: ${response.statusText}`);
+      if (!res.ok) {
+        if (res.status === 401) {
+          setError("Sessão expirada. Faça login novamente.");
+          return;
+        }
+        if (res.status === 500) {
+          setError("Erro no servidor. Tente novamente mais tarde.");
+          return;
+        }
+        const errBody = await res.json().catch(() => null);
+        setError(errBody?.message || `Erro ${res.status}: ${res.statusText}`);
+        return;
       }
 
-      const json = await response.json();
+      const json = await res.json();
+
+      // 'json' pode ser array ou conter propriedades; tenta normalizar
+      const list = Array.isArray(json) ? json : Array.isArray(json.result) ? json.result : [];
 
       // Mapear a resposta para o formato esperado no front
-      const mappedData = json.map((item) => ({
-        id: item.id,
-        nome: item.nome_produto,
-        tipo: item.nome_tipo,
-        marca: item.nome_marca,
-        validade: item.validade?.split("T")[0] || "",
-        status: item.nome_status === "entrou" ? "entrada" : "saida",
-        horario: item.horario_alteracao?.split("T")[1]?.split(".")[0] || "",
-        imagem: "../public/Leite.png", // aqui pode mapear dinamicamente se quiser
-        quantidade: item.quantidade,
-      }));
+      const mappedData = list.map((item) => {
+        const validadeIso = item.validade?.split("T")[0] || "";
+        const horarioIso = item.horario_alteracao?.split("T")[1]?.split(".")[0] || "";
+
+        // tenta gerar imagem baseada no nome do produto ou usa default
+        const produtoNome = item.nome_produto || item.produto || "default";
+        const imagemPath = `/${produtoNome.replace(/\s+/g, "")}.png`; // /Leite.png
+        return {
+          id: item.id ?? `${Math.random().toString(36).slice(2, 9)}`,
+          nome: produtoNome,
+          tipo: item.nome_tipo || item.tipo || "-",
+          marca: item.nome_marca || item.marca || "-",
+          validade: validadeIso,
+          status: item.nome_status === "entrou" ? "entrada" : "saida",
+          horario: horarioIso,
+          imagem: imagemPath,
+          quantidade: item.quantidade ?? item.qtd ?? 0,
+        };
+      });
 
       setData(mappedData);
       setPage(1); // reset page
     } catch (err) {
-      setError(err.message || "Erro ao buscar histórico");
+      console.error("fetchHistorico error:", err);
+      setError("Erro de conexão. Verifique sua internet e tente novamente.");
     } finally {
       setLoading(false);
     }
   };
 
-  // Busca ao montar e sempre que receber notificação WS (não implementado aqui)
+  // Busca ao montar
   useEffect(() => {
-    fetchHistorico();
+    let mounted = true;
+    if (mounted) fetchHistorico();
+    return () => {
+      mounted = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Filtragem atualizada para os novos campos
-  const filtered = data.filter(
-    (item) =>
-      item.nome.toLowerCase().includes(search.toLowerCase()) ||
-      item.tipo.toLowerCase().includes(search.toLowerCase()) ||
-      item.marca.toLowerCase().includes(search.toLowerCase()) ||
-      item.validade.includes(search) ||
-      item.status.toLowerCase().includes(search.toLowerCase()) ||
-      item.horario.includes(search)
-  );
+  const filtered = data.filter((item) => {
+    const q = search.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      (item.nome || "").toLowerCase().includes(q) ||
+      (item.tipo || "").toLowerCase().includes(q) ||
+      (item.marca || "").toLowerCase().includes(q) ||
+      (item.validade || "").includes(q) ||
+      (item.status || "").toLowerCase().includes(q) ||
+      (item.horario || "").includes(q)
+    );
+  });
 
   // Ordenação
   const sorted = [...filtered].sort((a, b) => {
-    if (order === "recentes") return b.id - a.id;
-    return a.id - b.id;
+    if (order === "recentes") {
+      // tenta ordenar por id numérico quando possível
+      const ai = parseInt(a.id, 10);
+      const bi = parseInt(b.id, 10);
+      if (!Number.isNaN(ai) && !Number.isNaN(bi)) return bi - ai;
+      return b.id > a.id ? 1 : -1;
+    }
+    const ai = parseInt(a.id, 10);
+    const bi = parseInt(b.id, 10);
+    if (!Number.isNaN(ai) && !Number.isNaN(bi)) return ai - bi;
+    return a.id > b.id ? 1 : -1;
   });
 
-  const totalPages = Math.ceil(sorted.length / PAGE_SIZE);
+  const totalPages = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
   const startIdx = (page - 1) * PAGE_SIZE;
   const endIdx = startIdx + PAGE_SIZE;
   const pageData = sorted.slice(startIdx, endIdx);
@@ -93,7 +139,10 @@ const Historico = () => {
 
   function formatValidade(dataStr) {
     if (!dataStr) return "";
-    const [ano, mes, dia] = dataStr.split("-");
+    // aceita YYYY-MM-DD ou similar
+    const parts = dataStr.split("-");
+    if (parts.length !== 3) return dataStr;
+    const [ano, mes, dia] = parts;
     return `${dia}-${mes}-${ano}`;
   }
 
@@ -123,11 +172,7 @@ const Historico = () => {
 
     if (page > 2) {
       pages.push(
-        <button
-          key={page - 1}
-          className="historico-page-btn"
-          onClick={() => setPage(page - 1)}
-        >
+        <button key={page - 1} className="historico-page-btn" onClick={() => setPage(page - 1)}>
           {page - 1}
         </button>
       );
@@ -135,11 +180,7 @@ const Historico = () => {
 
     if (page !== 1 && page !== totalPages) {
       pages.push(
-        <button
-          key={page}
-          className="historico-page-btn active"
-          onClick={() => setPage(page)}
-        >
+        <button key={page} className="historico-page-btn active" onClick={() => setPage(page)}>
           {page}
         </button>
       );
@@ -147,11 +188,7 @@ const Historico = () => {
 
     if (page < totalPages - 1) {
       pages.push(
-        <button
-          key={page + 1}
-          className="historico-page-btn"
-          onClick={() => setPage(page + 1)}
-        >
+        <button key={page + 1} className="historico-page-btn" onClick={() => setPage(page + 1)}>
           {page + 1}
         </button>
       );
@@ -216,11 +253,7 @@ const Historico = () => {
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
-            <select
-              className="historico-order"
-              value={order}
-              onChange={(e) => setOrder(e.target.value)}
-            >
+            <select className="historico-order" value={order} onChange={(e) => setOrder(e.target.value)}>
               <option value="recentes">Mais recentes</option>
               <option value="antigos">Mais antigos</option>
             </select>
@@ -249,7 +282,7 @@ const Historico = () => {
               <tbody>
                 {pageData.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="historico-empty">
+                    <td colSpan={8} className="historico-empty">
                       Nenhum registro encontrado.
                     </td>
                   </tr>
@@ -262,6 +295,7 @@ const Historico = () => {
                             src={item.imagem}
                             alt={item.nome}
                             className="produto-miniatura"
+                            onError={(e) => (e.target.src = "/default.png")}
                           />
                           <span className="produto-nome">{item.nome}</span>
                         </div>
@@ -274,9 +308,7 @@ const Historico = () => {
                       </td>
                       <td className="status-cell">
                         <span
-                          className={`historico-arrow-icon ${
-                            item.status === "saida" ? "saida" : "entrada"
-                          }`}
+                          className={`historico-arrow-icon ${item.status === "saida" ? "saida" : "entrada"}`}
                           title={item.status === "saida" ? "Saída" : "Entrada"}
                           style={{
                             display: "inline-flex",
@@ -287,9 +319,7 @@ const Historico = () => {
                           }}
                         >
                           <span className="material-icons-sharp">
-                            {item.status === "saida"
-                              ? "arrow_outward"
-                              : "arrow_downward"}
+                            {item.status === "saida" ? "arrow_outward" : "arrow_downward"}
                           </span>
                           <span style={{ fontSize: "1rem", fontWeight: 600 }}>
                             {item.status === "saida" ? "Saída" : "Entrada"}
@@ -297,13 +327,10 @@ const Historico = () => {
                         </span>
                       </td>
                       <td className="horario-cell hide-mobile">{item.horario}</td>
-                      
+
                       {/* Botão de detalhes no mobile */}
                       <td className="detalhes-cell show-mobile">
-                        <button
-                          className="detalhes-btn"
-                          onClick={() => setModalItem(item)}
-                        >
+                        <button className="detalhes-btn" onClick={() => setModalItem(item)}>
                           <span className="material-icons-sharp">info</span>
                         </button>
                       </td>
@@ -317,20 +344,26 @@ const Historico = () => {
         )}
       </main>
 
+      <Footer />
+
       {/* ===== Modal ===== */}
       {modalItem && (
         <div className="modal-overlay" onClick={() => setModalItem(null)}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <h3>Detalhes do Produto</h3>
-            <img
-              src={modalItem.imagem}
-              alt={modalItem.nome}
-              className="modal-imagem"
-            />
-            <p><strong>Tipo:</strong> {modalItem.tipo}</p>
-             <p><strong>Horário:</strong> {modalItem.horario}</p>
-            <p><strong>Marca:</strong> {modalItem.marca}</p>
-            <p><strong>Validade:</strong> {formatValidade(modalItem.validade)}</p>
+            <img src={modalItem.imagem} alt={modalItem.nome} className="modal-imagem" onError={(e) => (e.target.src = "/default.png")} />
+            <p>
+              <strong>Tipo:</strong> {modalItem.tipo}
+            </p>
+            <p>
+              <strong>Horário:</strong> {modalItem.horario}
+            </p>
+            <p>
+              <strong>Marca:</strong> {modalItem.marca}
+            </p>
+            <p>
+              <strong>Validade:</strong> {formatValidade(modalItem.validade)}
+            </p>
             <button className="modal-fechar" onClick={() => setModalItem(null)}>
               Fechar
             </button>
@@ -338,9 +371,7 @@ const Historico = () => {
         </div>
       )}
     </div>
-    
   );
-  
 };
 
 export default Historico;

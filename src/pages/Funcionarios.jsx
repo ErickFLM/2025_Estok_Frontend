@@ -1,12 +1,15 @@
+// src/pages/Funcionarios.jsx
 import React, { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import Sidebar from "../components/Sidebar/Sidebar";
 import "./Funcionarios.css";
 import Footer from "../components/Footer";
+import authFetch from "../utils/authFetch"; // precisa aceitar (input, init, { onUnauthorized })
 
 const STORAGE_KEY = "estok_funcionarios";
 const API_CREATE = "https://two025-estok-backend.onrender.com/api/estok/employee/create-employee";
 const API_GET = "https://two025-estok-backend.onrender.com/api/estok/employee/get-employees";
-// coloque sua chave em .env como VITE_AUTH_KEY ou substitua abaixo
+// coloque sua chave em .env como VITE_AUTH_KEY
 const API_KEY = import.meta.env.VITE_AUTH_KEY;
 
 const validateEmail = (email) => /^\S+@\S+\.\S+$/.test(email);
@@ -36,6 +39,8 @@ const Funcionarios = () => {
   const [novoStatusMsg, setNovoStatusMsg] = useState("");
   const [novoStatusOk, setNovoStatusOk] = useState(null); // null = nada, true = sucesso, false = erro
 
+  const navigate = useNavigate();
+
   // Carrega do servidor ao entrar na página
   useEffect(() => {
     let mounted = true;
@@ -53,34 +58,43 @@ const Funcionarios = () => {
     };
 
     const fetchFuncionarios = async () => {
+      if (!mounted) return;
       setListLoading(true);
       setListError("");
       try {
-        const res = await fetch(API_GET, {
+        const res = await authFetch(API_GET, {
           method: "GET",
           headers: {
             "Content-Type": "application/json",
-            // se sua API exige x-api-key no GET, descomente a linha abaixo
             ...(API_KEY ? { "x-api-key": API_KEY } : {}),
           },
+        }, {
+          onUnauthorized: () => navigate("/login", { replace: true }),
         });
 
-        const ct = res.headers.get("content-type") || "";
-        const body = ct.includes("application/json") ? await res.json() : null;
-
         if (!res.ok) {
-          const errMsg = (body && (body.error || body.message)) || `Erro ${res.status}`;
-          throw new Error(errMsg);
+          if (res.status === 401) {
+            throw new Error("Sessão expirada. Faça login novamente.");
+          } else if (res.status === 500) {
+            throw new Error("Erro no servidor. Tente novamente mais tarde.");
+          } else {
+            const errBody = await res.json().catch(() => null);
+            throw new Error((errBody && (errBody.error || errBody.message)) || `Erro ${res.status}`);
+          }
         }
 
-        // body esperado: { status: true, data: [ { id, nome, email, senha, cod_genero }, ... ] }
-        const items = Array.isArray(body?.data) ? body.data : [];
+        const body = await res.json();
+
+        // body esperado: { status: true, data: [...] } ou apenas array
+        const items = Array.isArray(body?.data) ? body.data : (Array.isArray(body) ? body : []);
         const mapped = items.map((it) => ({
           id: it.id,
           usuario: it.nome ?? it.name ?? "",
           genero:
-            // se a API retorna cod_genero, traduz para label simples; ajuste conforme necessário
-            it.cod_genero === 1 ? "Masculino" : it.cod_genero === 2 ? "Feminino" : it.cod_genero === 3 ? "Outro" : it.genero ?? it.gender_name ?? "",
+            it.cod_genero === 1 ? "Masculino" :
+            it.cod_genero === 2 ? "Feminino" :
+            it.cod_genero === 3 ? "Outro" :
+            it.genero ?? it.gender_name ?? "",
           email: it.email ?? "",
           senha: it.senha ?? "",
         }));
@@ -91,26 +105,28 @@ const Funcionarios = () => {
         }
       } catch (err) {
         console.error("Erro ao carregar funcionários:", err);
-        if (mounted) {
-          setListError(err.message || "Erro ao carregar funcionários.");
-        }
+        if (mounted) setListError(err.message || "Erro ao carregar funcionários.");
       } finally {
         if (mounted) setListLoading(false);
       }
     };
 
-    // primeiro tenta mostrar cache rápido, mas sempre busca do servidor
+    // primeiro mostra cache rápido, mas sempre busca do servidor
     loadFromCache();
     fetchFuncionarios();
 
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [navigate]);
 
   useEffect(() => {
     // mantém cache atualizado sempre que funcionarios mudar
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(funcionarios));
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(funcionarios));
+    } catch (e) {
+      console.warn("Erro ao salvar cache:", e);
+    }
   }, [funcionarios]);
 
   const handleAbrirNovo = () => {
@@ -130,72 +146,81 @@ const Funcionarios = () => {
     setNovoStatusMsg("");
     setNovoStatusOk(null);
 
-    if (!novoNome || !novoGenero || !novoEmail || !novoSenha) {
+    if (!novoNome.trim() || !novoGenero || !novoEmail.trim() || !novoSenha) {
       setErroNovo("Preencha todos os campos.");
       return;
     }
-    if (!validateEmail(novoEmail)) {
+    if (!validateEmail(novoEmail.trim())) {
       setErroNovo("Informe um e-mail válido.");
       return;
     }
     const checks = passwordChecks(novoSenha);
-    if (!checks.length || !checks.upper || !checks.lower || !checks.number || !checks.special) {
+    if (!(checks.length && checks.upper && checks.lower && checks.number && checks.special)) {
       setErroNovo("A senha não atende aos requisitos obrigatórios.");
       return;
     }
 
     const payload = {
-      name: novoNome,
-      email: novoEmail,
+      name: novoNome.trim(),
+      email: novoEmail.trim(),
       gender_name: novoGenero,
       password: novoSenha,
     };
 
     setNovoLoading(true);
     try {
-      const res = await fetch(API_CREATE, {
+      const res = await authFetch(API_CREATE, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           ...(API_KEY ? { "x-api-key": API_KEY } : {}),
         },
         body: JSON.stringify(payload),
+      }, {
+        onUnauthorized: () => navigate("/login", { replace: true }),
       });
 
+      // tenta interpretar resposta
       const ct = res.headers.get("content-type") || "";
-      const body = ct.includes("application/json") ? await res.json() : await res.text();
+      const body = ct.includes("application/json") ? await res.json().catch(() => null) : await res.text().catch(() => null);
 
       if (res.ok) {
-        // sucesso: adiciona localmente e mostra mensagem verde
+        const createdId = body?.data?.id ?? body?.id ?? Date.now();
         const newItem = {
-          id: body?.data?.id ?? Date.now(),
-          usuario: novoNome,
-          genero: novoGenero,
-          email: novoEmail,
-          senha: novoSenha,
+          id: createdId,
+          usuario: payload.name,
+          genero: payload.gender_name,
+          email: payload.email,
+          senha: payload.password,
         };
         setFuncionarios((prev) => {
           const updated = [...prev, newItem];
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+          try { localStorage.setItem(STORAGE_KEY, JSON.stringify(updated)); } catch (e) {}
           return updated;
         });
+
         setNovoStatusOk(true);
         setNovoStatusMsg(
-          typeof body === "string" ? body || "Funcionário criado com sucesso." : body.message || "Funcionário criado com sucesso."
+          typeof body === "string"
+            ? body || "Funcionário criado com sucesso."
+            : body?.message || "Funcionário criado com sucesso."
         );
+
         // limpa campos
         setNovoNome("");
         setNovoGenero("");
         setNovoEmail("");
         setNovoSenha("");
-        // fecha modal se quiser: setModalNovoOpen(false);
+        // opcional: fechar modal automaticamente
+        // setModalNovoOpen(false);
       } else {
-        // erro: mostra mensagem vermelha com o erro retornado (se houver)
-        setNovoStatusOk(false);
+        // erro do servidor: exibir mensagem vindo do backend (body.error/body.message) ou texto cru
         const msg = (body && (body.error || body.message)) || (typeof body === "string" ? body : `Erro ${res.status}`);
+        setNovoStatusOk(false);
         setNovoStatusMsg(msg);
       }
     } catch (err) {
+      console.error("Erro ao criar funcionário:", err);
       setNovoStatusOk(false);
       setNovoStatusMsg(err.message || "Erro de rede. Tente novamente.");
     } finally {
